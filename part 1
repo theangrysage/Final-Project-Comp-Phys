@@ -1,0 +1,96 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Function to compute Ising Hamiltonian
+def compute_hamiltonian(spins, weights):
+    """
+    Compute the energy of the Ising system (Hamiltonian).
+    H = - Σ J_ij S_i S_j
+    """
+    energy = -0.5 * np.sum(weights * np.outer(spins, spins))
+    return energy
+
+# Function to generate random spin configurations
+def generate_random_spins(n):
+    """
+    Generate random spin states (+1 or -1).
+    """
+    return np.random.choice([-1, 1], size=n)
+
+# Function to initialize weights from a random neural network layer
+def initialize_weights(n):
+    """
+    Generate random symmetric weight matrices (like neural network weights).
+    """
+    weights = np.random.randn(n, n)
+    weights = (weights + weights.T) / 2  # Ensure symmetry
+    np.fill_diagonal(weights, 0)  # No self-interactions
+    return weights
+
+# Function to shuffle weights
+def shuffle_weights(weights):
+    """
+    Randomize the order of weights while keeping the distribution intact.
+    """
+    shuffled = np.random.permutation(weights.flatten()).reshape(weights.shape)
+    return shuffled
+
+# Function to estimate density of states
+def density_of_states(weights, num_samples=1000):
+    """
+    Estimate the density of states g(E) for a given weight matrix.
+    """
+    n = weights.shape[0]
+    energies = []
+    for _ in range(num_samples):
+        spins = generate_random_spins(n)
+        energy = compute_hamiltonian(spins, weights)
+        energies.append(energy)
+    
+    # Histogram of energy states
+    hist, bin_edges = np.histogram(energies, bins=50, density=True)
+    return bin_edges[:-1], np.log(hist + 1e-10)  # Log to avoid log(0)
+
+
+# Simulate multiple transformer models
+models = {
+    "opt-125m": 125,  # Number of neurons for opt-125m
+    "bert-base": 768,  # Number of neurons for bert-base
+    "opt-1.3b": 1300  # Number of neurons for opt-1.3b
+}
+
+results = {}
+
+for model_name, num_neurons in models.items():
+    print(f"Simulating {model_name}...")
+    
+    # Initialize weights
+    trained_weights = initialize_weights(num_neurons)
+    shuffled_weights = shuffle_weights(trained_weights)
+    
+    # Compute density of states
+    E_trained, log_gE_trained = density_of_states(trained_weights)
+    E_shuffled, log_gE_shuffled = density_of_states(shuffled_weights)
+    
+    # Store results
+    results[model_name] = {
+        "E_trained": E_trained,
+        "log_gE_trained": log_gE_trained,
+        "E_shuffled": E_shuffled,
+        "log_gE_shuffled": log_gE_shuffled
+    }
+# Plot the density of states for each model
+plt.figure(figsize=(15, 5))
+
+for i, (model_name, data) in enumerate(results.items(), 1):
+    plt.subplot(1, 3, i)
+    plt.plot(data["E_trained"], data["log_gE_trained"], 'o-', label="Trained")
+    plt.plot(data["E_shuffled"], data["log_gE_shuffled"], '^-', label="Shuffled")
+    plt.xlabel("$E/N$")
+    plt.ylabel("$\ln(g(E)/N)$")
+    plt.title(model_name)
+    plt.legend()
+    plt.grid()
+
+plt.tight_layout()
+plt.show()
