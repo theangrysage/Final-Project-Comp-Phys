@@ -1,0 +1,155 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from typing import List, Tuple
+import time
+
+class IsingModelSimulator:
+    def __init__(self, num_nodes: int, num_layers: int):
+        self.num_nodes = num_nodes
+        self.num_layers = num_layers
+        self.nodes = self._alloc_nodes()
+        self.spins = self._alloc_spins()
+        self.couplings = self._alloc_couplings()
+        
+    def _alloc_nodes(self) -> List[int]:
+        """Allocate nodes per layer following the transformer architecture"""
+        nodes = []
+        for l in range(self.num_layers + 1):
+            if l % 4 == 3:  # FF layer
+                nodes.append(self.num_nodes * 4)
+            else:  # Attention layers
+                nodes.append(self.num_nodes)
+        return nodes
+    
+    def _alloc_spins(self) -> List[np.ndarray]:
+        """Initialize spins with random ±1"""
+        return [np.random.choice([-1, 1], size=n) for n in self.nodes]
+    
+    def _alloc_couplings(self) -> List[np.ndarray]:
+        """Initialize coupling matrices between layers"""
+        return [np.random.normal(0, 1/np.sqrt(self.nodes[l]), 
+                               (self.nodes[l], self.nodes[l+1])) 
+                for l in range(self.num_layers)]
+    
+    def shuffle_couplings(self):
+        """Shuffle coupling matrices while preserving distribution"""
+        shuffled_couplings = []
+        for l in range(self.num_layers):
+            shuffled = np.copy(self.couplings[l])
+            shape = shuffled.shape
+            shuffled = shuffled.flatten()
+            np.random.shuffle(shuffled)
+            shuffled_couplings.append(shuffled.reshape(shape))
+        return shuffled_couplings
+    
+    def calculate_energy(self, couplings=None) -> float:
+        """Calculate total energy of the system"""
+        if couplings is None:
+            couplings = self.couplings
+            
+        energy = 0.0
+        for l in range(self.num_layers):
+            energy += -np.sum(couplings[l] * 
+                            np.outer(self.spins[l], self.spins[l+1]))
+        return energy
+    
+    def mcmc_step(self, energy: float, couplings=None) -> float:
+        """Perform one MCMC step"""
+        if couplings is None:
+            couplings = self.couplings
+            
+        # Select random spin
+        layer = np.random.randint(0, self.num_layers + 1)
+        node = np.random.randint(0, self.nodes[layer])
+        
+        # Calculate energy change for flip
+        delta_E = 0
+        if layer > 0:
+            delta_E += 2 * np.sum(couplings[layer-1][::, node] * 
+                                self.spins[layer-1])
+        if layer < self.num_layers:
+            delta_E += 2 * np.sum(couplings[layer][node, ::] * 
+                                self.spins[layer+1])
+            
+        # Flip if energy decreases (zero temperature)
+        if delta_E > 0:
+            self.spins[layer][node] *= -1
+            energy -= 2 * delta_E
+            
+        return energy
+
+def run_simulation(model_name: str, num_nodes: int, num_layers: int, 
+                  mcmc_steps: int = 10000) -> List[Tuple[float, float]]:
+    """Run simulation for given model configuration"""
+    results = []
+    max_delta = 0
+    
+    print(f"\nRunning simulation for {model_name}...")
+    start_time = time.time()
+    
+    # Run for different layer fractions
+    for l in range(1, num_layers + 1):
+        print(f"Processing layer {l}/{num_layers}")
+        
+        # Create simulator instance
+        sim = IsingModelSimulator(num_nodes, l)
+        
+        # Run MCMC for trained configuration
+        energy = sim.calculate_energy()
+        for step in range(mcmc_steps):
+            energy = sim.mcmc_step(energy)
+        E_trained = energy
+        
+        # Run MCMC for shuffled configuration
+        shuffled_couplings = sim.shuffle_couplings()
+        energy = sim.calculate_energy(shuffled_couplings)
+        for step in range(mcmc_steps):
+            energy = sim.mcmc_step(energy, shuffled_couplings)
+        E_shuffled = energy
+        
+        # Calculate normalized difference
+        delta = (E_trained - E_shuffled) / abs(E_shuffled)
+        max_delta = max(max_delta, abs(delta))
+        results.append((l/num_layers, delta))
+    
+    # Normalize results
+    results = [(x, y/max_delta) for x, y in results]
+    
+    print(f"Simulation completed in {time.time() - start_time:.2f} seconds")
+    return results
+
+# Run simulations for different models
+models = {
+    'opt-125m': {'nodes': 768, 'layers': 12},
+    'bert-base': {'nodes': 768, 'layers': 12},
+    'gpt2': {'nodes': 768, 'layers': 12}
+}
+
+results = {}
+for model_name, config in models.items():
+    results[model_name] = run_simulation(
+        model_name, 
+        config['nodes'], 
+        config['layers'], 
+        mcmc_steps=5000  # Reduced for demonstration
+    )
+
+# Plot results
+plt.figure(figsize=(10, 6))
+markers = {'opt-125m': 'o', 'bert-base': '^', 'gpt2': 's'}
+colors = {'opt-125m': '#1f77b4', 'bert-base': '#ff7f0e', 'gpt2': '#2ca02c'}
+
+for model_name, model_results in results.items():
+    x, y = zip(*model_results)
+    plt.plot(x, y, marker=markers[model_name], color=colors[model_name], 
+             label=model_name, linewidth=2, markersize=8)
+
+plt.grid(True)
+plt.xlabel('l/L')
+plt.ylabel('Δ/Δmax')
+plt.legend()
+plt.title('Difference in g(E) widths for trained and shuffled')
+
+# Save plot
+plt.savefig('ising_simulation_results.png', dpi=300, bbox_inches='tight')
+plt.show()
